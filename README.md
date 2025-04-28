@@ -12,6 +12,7 @@ Detailed debugging output
 
 ```bash
 pip install vman3-dq
+```
 
 ## Usage
 
