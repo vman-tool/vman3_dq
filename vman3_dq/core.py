@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Dict
 
+import os
+from importlib.resources import files, as_file
+from typing import Optional
+
 def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verbose: bool = False) -> pd.Series:
     """
     Robust ODK relevance parser that handles:
@@ -77,7 +81,11 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
         print(f"Error evaluating expression: {expr}\n{str(e)}")
         return pd.Series(False, index=data_df.index)
 
-def change_null_toskipped(data_df: pd.DataFrame, dictionary_df: pd.DataFrame, verbose: bool = False):
+def change_null_toskipped(
+        data_df: pd.DataFrame, 
+        dictionary_df: Optional[pd.DataFrame] = None, 
+        verbose: bool = False
+) -> pd.DataFrame:
     """
     Populates NaN/NULL with 'skipped' in variables that were conditionally not shown.
 
@@ -90,6 +98,19 @@ def change_null_toskipped(data_df: pd.DataFrame, dictionary_df: pd.DataFrame, ve
     - Updated DataFrame with 'skipped' in hidden-but-null fields
     """
 
+    # Load default dictionary if none provided
+    if dictionary_df is None:
+        try:
+            # Using importlib.resources for modern Python package resource handling
+            from importlib.resources import files, as_file
+            ref = files('vman3_dq.data').joinpath('dictionary.csv')
+            with as_file(ref) as dict_path:
+                dictionary_df = pd.read_csv(dict_path)
+                if verbose:
+                    print("Loaded default dictionary from package data")
+        except Exception as e:
+            raise ValueError("Could not load default dictionary from package") from e
+        
     if verbose:
         print("\n[DEBUG check_input] Processing Start")
         print(f"[DEBUG check_input] List of variables: {list(data_df.columns)}")
@@ -145,19 +166,39 @@ def change_null_toskipped(data_df: pd.DataFrame, dictionary_df: pd.DataFrame, ve
     
     # Update ageInYears with ageInYears2 if ageInYears is NULL
     # Reduce the number of NUll in the ageInYears column
-    print("\nUpdating ageInYears column")
-    print(data_df.columns)
-    data_df['ageInYears'] = data_df['ageInYears'].fillna(data_df['ageInYears2'])
-    data_df.loc[data_df.ageInYears.isna() & data_df.isNeonatal == 1, 'ageInYears']=0
+    if verbose:
+        print("\nUpdating ageInYears column")
+        print(data_df.columns)
 
-    # # copy only valid years. remove age 
-    data_df['ageInYears'] = data_df['ageInYears'].fillna(
-        data_df['age_adult'].where(
-            (data_df['age_adult'].notna()) & 
-            (data_df['age_adult'] != 999) & 
-            (data_df['age_adult'] <= 120)
+    # Create case-insensitive column name mapping
+    col_case_mapping = {col.lower(): col for col in data_df.columns}
+
+    # Get the actual column names with case preserved
+    age_col = col_case_mapping.get('ageinyears')
+    age_col2 = col_case_mapping.get('ageinyears2')
+    neonatal_col = col_case_mapping.get('isneonatal')
+    age_adult_col = col_case_mapping.get('age_adult')  # Note: underscore remains important
+
+    if age_col and age_col2 in data_df.columns:
+        data_df[age_col] = data_df[age_col].fillna(data_df[age_col2])
+        if verbose:
+            print(f"Updated {age_col} with values from {age_col2}")
+
+    if age_col and neonatal_col in data_df.columns:
+        data_df.loc[data_df[age_col].isna() & (data_df[neonatal_col] == 1), age_col] = 0
+        if verbose:
+            print(f"Updated {age_col} for neonatal cases")
+
+    if age_col and age_adult_col in data_df.columns:
+        data_df[age_col] = data_df[age_col].fillna(
+            data_df[age_adult_col].where(
+                (data_df[age_adult_col].notna()) & 
+                (data_df[age_adult_col] != 999) & 
+                (data_df[age_adult_col] <= 120)
+            )
         )
-    )
+        if verbose:
+            print(f"Updated {age_col} with valid values from {age_adult_col}")
 
     if verbose:
         print("\n[DEBUG check_input] Processing Complete")
