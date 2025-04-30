@@ -12,16 +12,12 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
     # Ensure we're working with a clean copy of the DataFrame
     eval_df = data_df.copy()
     
-    # Standardize column names to lowercase
-    # eval_df.columns = eval_df.columns.str.lower()
-    col_case_mapping = {col.lower(): col for col in eval_df.columns}
-
     # Convert all columns to string type for safer evaluation
     for col in eval_df.columns:
         if pd.api.types.is_object_dtype(eval_df[col]):
             eval_df[col] = eval_df[col].astype(str)
     
-    
+    col_case_mapping = {col.lower(): col for col in eval_df.columns}
     expr = str(relevance_expr).strip()
     
     # Normalize whitespace
@@ -69,7 +65,6 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
         # Use locals() to ensure all columns are available in evaluation context
         return eval_df.eval(expr, engine='python', local_dict={col: eval_df[col] for col in eval_df.columns})
     except Exception as e:
-        # print(f"Error evaluating expression: {expr}\nError: {str(e)}")
         print(f"Error evaluating expression: {expr}\nError: {str(e)}")
         return pd.Series(False, index=eval_df.index)
 
@@ -93,8 +88,6 @@ def change_null_toskipped(
     # drop all colums with sufix _check. These do not provide any relevant informaton
     data_df = data_df.drop(columns=[col for col in data_df.columns if "_check" in col])
 
-    if verbose:
-        print(f"Number of NULLs before cleaning {data_df.isna().sum().sum():,}")  
     # Load default dictionary if none provided
     if dictionary_df is None:
         try:
@@ -199,7 +192,6 @@ def change_null_toskipped(
             print(f"Updated {age_col} adults if NULL with valid values from {age_adult_col}")
 
     if verbose:
-        print(f"Number of NULLs after cleaning {data_df.isna().sum().sum():,}")  
         print("\n[DEBUG check_input] Processing Complete")
 
     return data_df
@@ -217,4 +209,5 @@ if __name__ == "__main__":
     # Read file with detected encoding
     print("\n Reading the input file")
     df = pd.read_csv(args.input,encoding = encoding,low_memory = False)
+    #change_null_toskipped(df)
     change_null_toskipped(df, verbose=args.verbose)
