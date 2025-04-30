@@ -26,6 +26,7 @@ dict_df = pd.read_csv('dictionary.csv') # optional parameter that specific valid
 
 # Process the data
 processed_data = change_null_toskipped(data_df)
-or
-processed_data = change_null_toskipped(data_df, dict_df,verbose=True)  # include data dictionary & output debug
+
+# or include data dictionary & display debug output
+processed_data = change_null_toskipped(data_df, dict_df,verbose=True)  
 
