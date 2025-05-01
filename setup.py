@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="vman3_dq",
-    version="0.1.4",
+    version="0.1.5",
     author="Isaac Lyatuu",
     author_email="ilyatuu@gmail.com",
     description="VMan3 Data Quality Toolkit",

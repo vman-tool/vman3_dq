@@ -155,7 +155,11 @@ def change_null_toskipped(
                     data_df[df_var_name].isna() | 
                     (data_df[df_var_name].astype(str).str.strip().str.upper().isin(["NULL", "NA", ""]))
                 )
-                data_df.loc[mask, df_var_name] = 'skipped'
+                # Convert column to object/string type before assigning 'skipped'
+                if mask.any():  # Only convert if there are values to replace
+                    if pd.api.types.is_numeric_dtype(data_df[df_var_name]):
+                        data_df[df_var_name] = data_df[df_var_name].astype(object)
+                    data_df.loc[mask, df_var_name] = 'skipped'
                 # if verbose:
                 #     print(f"[DEBUG] Processed {dict_var_name} (matched to {df_var_name}): set {mask.sum()} values to 'skipped'")
         except Exception as e:
