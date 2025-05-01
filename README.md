@@ -22,7 +22,11 @@ from vman3_dq import change_null_toskipped
 
 # Load your data
 data_df = pd.read_csv('va_data.csv')
-dict_df = pd.read_csv('dictionary.csv')
+dict_df = pd.read_csv('dictionary.csv') # optional parameter that specific validation criteria.
 
 # Process the data
-processed_data = change_null_toskipped(data_df, dict_df, verbose=True)
+processed_data = change_null_toskipped(data_df)
+
+# or include data dictionary & display debug output
+processed_data = change_null_toskipped(data_df, dict_df,verbose=True)  
+
