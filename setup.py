@@ -4,11 +4,11 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="vman3_dq",
-    version="0.1.5",
+    name="vman3",
+    version="0.2.0",
     author="Isaac Lyatuu",
     author_email="ilyatuu@gmail.com",
-    description="VMan3 Data Quality Toolkit",
+    description="VMan3 Data Processing Toolkit",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/vman-tool/vman3-dq",
@@ -26,6 +26,6 @@ setup(
     python_requires='>=3.7',
     include_package_data=True,
     package_data={
-        'vman3_dq': ['data/*.csv'],
+        'vman3': ['data/*.csv'],
     },
 )
