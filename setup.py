@@ -4,14 +4,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="vman3",
-    version="0.2.0",
+    name="vman_dq",
+    version="1.0.0",
     author="Isaac Lyatuu",
     author_email="ilyatuu@gmail.com",
-    description="VMan3 Data Processing Toolkit",
+    description="VMan3 Data Quality Toolkit",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/vman-tool/vman3-dq",
+    url="https://github.com/vman-tool/vman3_dq",
     packages=find_packages(),
     install_requires=[
         'pandas>=1.0.0',
@@ -26,6 +26,6 @@ setup(
     python_requires='>=3.7',
     include_package_data=True,
     package_data={
-        'vman3': ['data/*.csv'],
+        'vman_dq': ['data/*.csv'],
     },
 )

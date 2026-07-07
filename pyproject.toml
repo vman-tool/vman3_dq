@@ -5,14 +5,19 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vman3"
-version = "0.2"
+name = "vman_dq"
+version = "1.0.0"
 authors = [
     {name = "Isaac Lyatuu", email = "ilyatuu@gmail.com"},
 ]
-description = "VMan3 Data Processing Toolkit"
+description = "VMan3 Data Quality Toolkit"
 readme = "README.md"
 requires-python = ">=3.7"
+dependencies = [
+    "pandas>=1.0.0",
+    "numpy>=1.18.0",
+    "chardet>=3.0.4",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -20,4 +25,4 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vman-tool/vman3"
+Homepage = "https://github.com/vman-tool/vman3_dq"

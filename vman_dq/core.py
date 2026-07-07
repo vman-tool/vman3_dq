@@ -3,12 +3,9 @@ import pandas as pd
 import argparse
 import chardet
 import numpy as np
-from typing import Tuple, Dict
-from pycrossva.transform import transform
-
+from typing import Tuple, Dict, Optional
 import os
 from importlib.resources import files, as_file
-from typing import Optional
 def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verbose: bool = False) -> pd.Series:
     # Work with a clean copy of the DataFrame
     eval_df = data_df.copy()
@@ -112,7 +109,7 @@ def change_null_toskipped(
         try:
             # Using importlib.resources for modern Python package resource handling
             from importlib.resources import files, as_file
-            ref = files('vman3.data').joinpath('dictionary.csv')
+            ref = files('vman_dq.data').joinpath('dictionary.csv')
             with as_file(ref) as dict_path:
                 dictionary_df = pd.read_csv(dict_path)
                 if verbose:
@@ -221,6 +218,7 @@ def pyCrossVA(input:str, key:str):
     inherit from pyCrossVA library
     convert WHOVA structure into ccva struture
     """
+    from pycrossva.transform import transform
     ccva_data = transform(("2016WHOv151","InterVA5"),input, raw_data_id="_key", lower=True, verbose=5)
     return ccva_data
 
