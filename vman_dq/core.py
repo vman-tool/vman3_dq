@@ -4,17 +4,16 @@ import argparse
 import chardet
 import numpy as np
 from typing import Tuple, Dict
+from pycrossva.transform import transform
 
 import os
 from importlib.resources import files, as_file
 from typing import Optional
 def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verbose: bool = False) -> pd.Series:
-    # Ensure we're working with a clean copy of the DataFrame
+    # Work with a clean copy of the DataFrame
     eval_df = data_df.copy()
-    
-    # Standardize column names to lowercase
-    # eval_df.columns = eval_df.columns.str.lower()
     col_case_mapping = {col.lower(): col for col in eval_df.columns}
+
 
     # Convert all columns to string type for safer evaluation
     for col in eval_df.columns:
@@ -24,30 +23,42 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
     
     expr = str(relevance_expr).strip()
     
-    # Normalize whitespace
+
+    # Normalize whitespace and handle spaces
     expr = ' '.join(expr.split())
+    expr = str(relevance_expr).strip()
+
 
     # Handle selected()
     def convert_selected(match):
         var = match.group(1).strip().lower()
         value = match.group(2).strip()
         actual_col = col_case_mapping.get(var, 'False')
-        return f"({actual_col} == '{value}')"  # Always treat as string comparison
-    
-    expr = re.sub(r"selected\(\s*\$\{?([^}]+)\}?\s*,\s*'([^']+)'\s*\)", convert_selected, expr, flags=re.IGNORECASE)
+        return f"({actual_col} == '{value}')"
 
-    # Replace variables
-    def replace_var(match):
-        var = match.group(1).lower()
-        return col_case_mapping.get(var, 'False')
+    expr = re.sub(
+        r"selected\(\s*\{?([^}]+)\}?\s*,\s*'([^']+)'\s*\)", 
+        convert_selected, 
+        expr, 
+        flags=re.IGNORECASE
+    )
     
-    expr = re.sub(r'\$\{(\w+)\}', replace_var, expr)
+    if 'selected' in expr or 'True' in expr:
+        print(f"Warning: Raw boolean in expression: {expr}")
 
-    # Fix operators
-    expr = re.sub(r'>\s*==', '>=', expr)
-    expr = re.sub(r'!\s*==', '!=', expr)
-    expr = re.sub(r'(?<!=)=(?!=)', '==', expr)
-    expr = re.sub(r'(?>!=)=(?!=)', '==', expr)
+    # def replace_var(match):
+    #     var = match.group(1).lower()
+    #     actual_col = col_case_mapping.get(var, None)
+    #     if actual_col is None:
+    #         if verbose:
+    #             print(f"Variable {var} not found in DataFrame columns")
+    #         return 'False'  # Return string 'False' instead of boolean False
+    #     return actual_col
+
+    # expr = re.sub(r'\$\{(\w+)\}', replace_var, expr)
+
+
+
     expr = (expr
             .replace(" and ", " & ")
             .replace(" or ", " | ")
@@ -55,6 +66,7 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
             .replace("! =", " != ")
             .replace(">==", " >= ")
             .replace("<==", " <= ")
+            .replace("?=", "==")
             )
 
     # Handle string-length()
@@ -63,14 +75,14 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
 
     # Validate parentheses
     if expr.count("(") != expr.count(")"):
+        if verbose:
+            print(f"Parentheses mismatch in expression: {expr}")
         return pd.Series(False, index=eval_df.index)
 
     try:
-        # Use locals() to ensure all columns are available in evaluation context
         return eval_df.eval(expr, engine='python', local_dict={col: eval_df[col] for col in eval_df.columns})
     except Exception as e:
-        # print(f"Error evaluating expression: {expr}\nError: {str(e)}")
-        print(f"Error evaluating expression: {expr}\nError: {str(e)}")
+        print(f"Error evaluating expression: {expr} \nThe error is: {str(e)}")
         return pd.Series(False, index=eval_df.index)
 
 def change_null_toskipped(
@@ -91,7 +103,7 @@ def change_null_toskipped(
     """
 
     # drop all colums with sufix _check. These do not provide any relevant informaton
-    data_df = data_df.drop(columns=[col for col in data_df.columns if "_check" in col])
+    data_df = data_df.drop(columns=[col for col in data_df.columns if "_check" in col.lower()])
 
     if verbose:
         print(f"Number of NULLs before cleaning {data_df.isna().sum().sum():,}")  
@@ -100,24 +112,28 @@ def change_null_toskipped(
         try:
             # Using importlib.resources for modern Python package resource handling
             from importlib.resources import files, as_file
-            ref = files('vman3_dq.data').joinpath('dictionary.csv')
+            ref = files('vman3.data').joinpath('dictionary.csv')
             with as_file(ref) as dict_path:
                 dictionary_df = pd.read_csv(dict_path)
                 if verbose:
                     print("Loaded default dictionary from package data")
         except Exception as e:
             raise ValueError("Could not load default dictionary from package") from e
-        
-    # if verbose:
-    #     print("\n[DEBUG check_input] Processing Start")
-    #     print(f"[DEBUG check_input] List of variables: {list(data_df.columns)}")
+
+
+    # Preprocess dictionary - remove problematic rows
+    dictionary_df = dictionary_df[
+        (dictionary_df['relevant'].notna()) & 
+        (~dictionary_df['relevant'].str.contains('\?', na=False))  # Filter expressions with ?
+    ].copy()
 
     # Create case mapping for DataFrame columns
     col_case_mapping = {col.lower(): col for col in data_df.columns}
     
-    # Clean column names in dictionary
-    #dictionary_df['name'] = dictionary_df['name'].astype(str).str.strip()
+    # Clean column names in dictionary and also remove '_check' suffix
     dictionary_df['name'] = dictionary_df['name'].str.lower().str.strip()
+    dictionary_df = dictionary_df[~dictionary_df['name'].str.contains('_check', case=False, na=False)]
+    
     
     # Only apply logic to select_one/text questions with a relevance rule
     target_vars = dictionary_df[
@@ -131,15 +147,12 @@ def change_null_toskipped(
         
         # Find matching column (case-insensitive)
         df_var_name = col_case_mapping.get(dict_var_name.lower())
-        
-        # if verbose:
-        #     print(f"[DEBUG] Processing Variable: {dict_var_name}")
             
         if df_var_name is None:
             if verbose:
                 print(f"Skipping {dict_var_name}: not found in dataset.")
             continue
-        
+
         try:
             # Get the mask for when the question should be shown
             should_show = parse_odk_relevance_to_mask(data_df, relevance, verbose=verbose)
@@ -160,17 +173,12 @@ def change_null_toskipped(
                     if pd.api.types.is_numeric_dtype(data_df[df_var_name]):
                         data_df[df_var_name] = data_df[df_var_name].astype(object)
                     data_df.loc[mask, df_var_name] = 'skipped'
+
                 # if verbose:
                 #     print(f"[DEBUG] Processed {dict_var_name} (matched to {df_var_name}): set {mask.sum()} values to 'skipped'")
         except Exception as e:
             if verbose:
                 print(f"Error processing '{dict_var_name}' with relevance '{relevance}': {str(e)}")
-    
-    # Update ageInYears with ageInYears2 if ageInYears is NULL
-    # Reduce the number of NUll in the ageInYears column
-    # if verbose:
-    #     print("\nUpdating ageInYears column")
-    #     print(data_df.columns)
 
     # Create case-insensitive column name mapping
     col_case_mapping = {col.lower(): col for col in data_df.columns}
@@ -207,6 +215,14 @@ def change_null_toskipped(
         print("\n[DEBUG check_input] Processing Complete")
 
     return data_df
+
+def pyCrossVA(input:str, key:str):
+    """
+    inherit from pyCrossVA library
+    convert WHOVA structure into ccva struture
+    """
+    ccva_data = transform(("2016WHOv151","InterVA5"),input, raw_data_id="_key", lower=True, verbose=5)
+    return ccva_data
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

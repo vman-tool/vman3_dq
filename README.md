@@ -1,32 +1,31 @@
-# VMan3 Data Quality Toolkit
+# VMan3 Data Processing Toolkit
 
-A Python package for processing and quality checking VMan3 data.
+A Python package for processing and quality checking VA data.
 
 ## Features
-Automatically marks skipped questions based on relevance expression
-Handles complex ODK relevance expressions
-Case-insensitive variable matching
-Detailed debugging output
+- Automatically marks skipped questions based on relevance expressions
+- Comprehensive data cleaning pipeline
+- Handles complex ODK relevance expressions
+- Case-insensitive variable matching
+- Detailed debugging output
 
 ## Installation
 
 ```bash
-pip install vman3-dq
+pip install vman3
 ```
 
 ## Usage
 
 ```bash
+import vman3 as vman
 import pandas as pd
-from vman3_dq import change_null_toskipped
 
 # Load your data
 data_df = pd.read_csv('va_data.csv')
-dict_df = pd.read_csv('dictionary.csv') # optional parameter that specific validation criteria.
+dict_df = pd.read_csv('dictionary.csv')
 
-# Process the data
-processed_data = change_null_toskipped(data_df)
+# Basic cleaning
+processed_data = vman.change_null_toskipped(data_df, dict_df, verbose=True)
 
-# or include data dictionary & display debug output
-processed_data = change_null_toskipped(data_df, dict_df,verbose=True)  
 
