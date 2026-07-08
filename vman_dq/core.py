@@ -1,32 +1,31 @@
 import re
+import time
 import pandas as pd
 import argparse
 import chardet
 import numpy as np
-from typing import Tuple, Dict, Optional
+from typing import Callable, Dict, Optional
 import os
 from importlib.resources import files, as_file
-def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verbose: bool = False) -> pd.Series:
-    # Work with a clean copy of the DataFrame
-    eval_df = data_df.copy()
-    col_case_mapping = {col.lower(): col for col in eval_df.columns}
 
 
-    # Convert all columns to string type for safer evaluation
-    for col in eval_df.columns:
-        if pd.api.types.is_object_dtype(eval_df[col]):
-            eval_df[col] = eval_df[col].astype(str)
-    
-    
+def _parse_relevance_on_eval_df(
+    eval_df: pd.DataFrame,
+    col_case_mapping: Dict[str, str],
+    eval_local_dict: Dict[str, pd.Series],
+    relevance_expr: str,
+    verbose: bool = False,
+) -> pd.Series:
+    """Evaluate one ODK relevance expression on a pre-built eval_df.
+
+    Extracted from parse_odk_relevance_to_mask so that change_null_toskipped
+    can build eval_df / eval_local_dict once and reuse them across all
+    dictionary rows instead of copying the dataframe on every call.
+    """
     expr = str(relevance_expr).strip()
-    
-
-    # Normalize whitespace and handle spaces
     expr = ' '.join(expr.split())
-    expr = str(relevance_expr).strip()
+    expr = str(relevance_expr).strip()  # preserves original double-strip behaviour
 
-
-    # Handle selected()
     def convert_selected(match):
         var = match.group(1).strip().lower()
         value = match.group(2).strip()
@@ -34,27 +33,14 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
         return f"({actual_col} == '{value}')"
 
     expr = re.sub(
-        r"selected\(\s*\{?([^}]+)\}?\s*,\s*'([^']+)'\s*\)", 
-        convert_selected, 
-        expr, 
-        flags=re.IGNORECASE
+        r"selected\(\s*\{?([^}]+)\}?\s*,\s*'([^']+)'\s*\)",
+        convert_selected,
+        expr,
+        flags=re.IGNORECASE,
     )
-    
+
     if 'selected' in expr or 'True' in expr:
         print(f"Warning: Raw boolean in expression: {expr}")
-
-    # def replace_var(match):
-    #     var = match.group(1).lower()
-    #     actual_col = col_case_mapping.get(var, None)
-    #     if actual_col is None:
-    #         if verbose:
-    #             print(f"Variable {var} not found in DataFrame columns")
-    #         return 'False'  # Return string 'False' instead of boolean False
-    #     return actual_col
-
-    # expr = re.sub(r'\$\{(\w+)\}', replace_var, expr)
-
-
 
     expr = (expr
             .replace(" and ", " & ")
@@ -66,26 +52,42 @@ def parse_odk_relevance_to_mask(data_df: pd.DataFrame, relevance_expr: str, verb
             .replace("?=", "==")
             )
 
-    # Handle string-length()
     expr = re.sub(r'string-length\(\s*([^)]+)\s*\)\s*==\s*0', r'(\1 == "")', expr)
     expr = re.sub(r'string-length\(\s*([^)]+)\s*\)\s*>=\s*1', r'(\1 != "")', expr)
 
-    # Validate parentheses
     if expr.count("(") != expr.count(")"):
         if verbose:
             print(f"Parentheses mismatch in expression: {expr}")
         return pd.Series(False, index=eval_df.index)
 
     try:
-        return eval_df.eval(expr, engine='python', local_dict={col: eval_df[col] for col in eval_df.columns})
+        return eval_df.eval(expr, engine='python', local_dict=eval_local_dict)
     except Exception as e:
         print(f"Error evaluating expression: {expr} \nThe error is: {str(e)}")
         return pd.Series(False, index=eval_df.index)
 
+
+def parse_odk_relevance_to_mask(
+    data_df: pd.DataFrame, relevance_expr: str, verbose: bool = False
+) -> pd.Series:
+    # Work with a clean copy of the DataFrame
+    eval_df = data_df.copy()
+    col_case_mapping = {col.lower(): col for col in eval_df.columns}
+
+    # Convert all columns to string type for safer evaluation
+    for col in eval_df.columns:
+        if pd.api.types.is_object_dtype(eval_df[col]):
+            eval_df[col] = eval_df[col].astype(str)
+
+    eval_local_dict = {col: eval_df[col] for col in eval_df.columns}
+    return _parse_relevance_on_eval_df(eval_df, col_case_mapping, eval_local_dict, relevance_expr, verbose)
+
+
 def change_null_toskipped(
-        data_df: pd.DataFrame, 
-        dictionary_df: Optional[pd.DataFrame] = None, 
-        verbose: bool = False
+    data_df: pd.DataFrame,
+    dictionary_df: Optional[pd.DataFrame] = None,
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[int], None]] = None,
 ) -> pd.DataFrame:
     """
     Populates NaN/NULL with 'skipped' in variables that were conditionally not shown.
@@ -94,21 +96,20 @@ def change_null_toskipped(
     - data_df: DataFrame containing the raw VA data
     - dictionary_df: DataFrame containing the xForm-style dictionary
     - verbose: Print debugging info if True
+    - progress_callback: Optional callable(pct: int) invoked with 0-100 as the
+                         relevance-rule loop progresses. Use this to drive a
+                         progress bar without polling.
 
     Returns:
     - Updated DataFrame with 'skipped' in hidden-but-null fields
     """
-
-    # drop all colums with sufix _check. These do not provide any relevant informaton
     data_df = data_df.drop(columns=[col for col in data_df.columns if "_check" in col.lower()])
 
     if verbose:
-        print(f"Number of NULLs before cleaning {data_df.isna().sum().sum():,}")  
-    # Load default dictionary if none provided
+        print(f"Number of NULLs before cleaning {data_df.isna().sum().sum():,}")
+
     if dictionary_df is None:
         try:
-            # Using importlib.resources for modern Python package resource handling
-            from importlib.resources import files, as_file
             ref = files('vman_dq.data').joinpath('dictionary.csv')
             with as_file(ref) as dict_path:
                 dictionary_df = pd.read_csv(dict_path)
@@ -117,74 +118,102 @@ def change_null_toskipped(
         except Exception as e:
             raise ValueError("Could not load default dictionary from package") from e
 
-
-    # Preprocess dictionary - remove problematic rows
     dictionary_df = dictionary_df[
-        (dictionary_df['relevant'].notna()) & 
-        (~dictionary_df['relevant'].str.contains('\?', na=False))  # Filter expressions with ?
+        (dictionary_df['relevant'].notna()) &
+        (~dictionary_df['relevant'].str.contains('\?', na=False))
     ].copy()
 
-    # Create case mapping for DataFrame columns
     col_case_mapping = {col.lower(): col for col in data_df.columns}
-    
-    # Clean column names in dictionary and also remove '_check' suffix
+
     dictionary_df['name'] = dictionary_df['name'].str.lower().str.strip()
     dictionary_df = dictionary_df[~dictionary_df['name'].str.contains('_check', case=False, na=False)]
-    
-    
-    # Only apply logic to select_one/text questions with a relevance rule
+
     target_vars = dictionary_df[
         dictionary_df['type'].str.contains('select_one|text', na=False) &
         dictionary_df['relevant'].notna()
-    ][['name', 'relevant']]
-    
-    for _, row in target_vars.iterrows():
-        dict_var_name = row['name'].strip()
+    ][['name', 'relevant']].copy()
+
+    # ── Build eval_df and its support structures ONCE ─────────────────────────
+    # Previously this copy + string conversion happened inside parse_odk_relevance_to_mask
+    # on every dictionary row (O(n_rules) copies). Now it runs once.
+    t0 = time.perf_counter()
+    eval_df = data_df.copy()
+    col_case_mapping_eval = {col.lower(): col for col in eval_df.columns}
+    for col in eval_df.columns:
+        if pd.api.types.is_object_dtype(eval_df[col]):
+            eval_df[col] = eval_df[col].astype(str)
+    eval_local_dict = {col: eval_df[col] for col in eval_df.columns}
+
+    if verbose:
+        print(f"eval_df prepared in {time.perf_counter() - t0:.3f}s")
+
+    # ── Resolve dictionary names to actual df column names; drop unknowns ─────
+    target_vars['df_col'] = target_vars['name'].apply(
+        lambda n: col_case_mapping.get(n.strip())
+    )
+    target_vars = target_vars[target_vars['df_col'].notna()].reset_index(drop=True)
+    n_target = len(target_vars)
+
+    if verbose:
+        print(f"Evaluating {n_target} relevance rules over {len(data_df)} records...")
+
+    # ── Lazy null-mask cache per column ───────────────────────────────────────
+    # Built on first access; invalidated when a column is written (values changed
+    # from null → 'skipped', so the mask must be recomputed on next access).
+    null_masks: Dict[str, pd.Series] = {}
+
+    def _null_mask(col: str) -> pd.Series:
+        if col not in null_masks:
+            s = data_df[col]
+            null_masks[col] = (
+                s.isna() |
+                s.astype(str).str.strip().str.upper().isin(["NULL", "NA", ""])
+            )
+        return null_masks[col]
+
+    last_reported = -1
+    t1 = time.perf_counter()
+
+    for i, (_, row) in enumerate(target_vars.iterrows()):
+        df_var_name = row['df_col']
         relevance = str(row['relevant']).strip()
-        
-        # Find matching column (case-insensitive)
-        df_var_name = col_case_mapping.get(dict_var_name.lower())
-            
-        if df_var_name is None:
-            if verbose:
-                print(f"Skipping {dict_var_name}: not found in dataset.")
-            continue
 
         try:
-            # Get the mask for when the question should be shown
-            should_show = parse_odk_relevance_to_mask(data_df, relevance, verbose=verbose)
-        
-            # if verbose and isinstance(should_show, pd.Series):
-            #     print(f"[DEBUG] Number of rows to be updated:\n{should_show.value_counts()}")
-            
+            should_show = _parse_relevance_on_eval_df(
+                eval_df, col_case_mapping_eval, eval_local_dict, relevance, verbose=verbose
+            )
+
             if isinstance(should_show, pd.Series):
-                # Mark as 'skipped' when:
-                # 1. The question should NOT be shown (not should_show)
-                # 2. The value is currently null/NA
-                mask = (~should_show) & (
-                    data_df[df_var_name].isna() | 
-                    (data_df[df_var_name].astype(str).str.strip().str.upper().isin(["NULL", "NA", ""]))
-                )
-                # Convert column to object/string type before assigning 'skipped'
-                if mask.any():  # Only convert if there are values to replace
+                mask = (~should_show) & _null_mask(df_var_name)
+                if mask.any():
                     if pd.api.types.is_numeric_dtype(data_df[df_var_name]):
                         data_df[df_var_name] = data_df[df_var_name].astype(object)
                     data_df.loc[mask, df_var_name] = 'skipped'
+                    null_masks.pop(df_var_name, None)  # invalidate cached mask
 
-                # if verbose:
-                #     print(f"[DEBUG] Processed {dict_var_name} (matched to {df_var_name}): set {mask.sum()} values to 'skipped'")
         except Exception as e:
             if verbose:
-                print(f"Error processing '{dict_var_name}' with relevance '{relevance}': {str(e)}")
+                print(f"Error processing '{row['name']}' with relevance '{relevance}': {str(e)}")
 
-    # Create case-insensitive column name mapping
+        if progress_callback and n_target > 0:
+            pct = int((i + 1) / n_target * 100)
+            if pct >= last_reported + 5 or i == n_target - 1:
+                progress_callback(pct)
+                last_reported = pct
+
+    if verbose:
+        print(
+            f"Relevance loop: {n_target} rules × {len(data_df)} records "
+            f"in {time.perf_counter() - t1:.3f}s"
+        )
+
+    # ── Age column backfill ───────────────────────────────────────────────────
     col_case_mapping = {col.lower(): col for col in data_df.columns}
 
-    # Get the actual column names with case preserved
-    age_col = col_case_mapping.get('ageinyears')
-    age_col2 = col_case_mapping.get('ageinyears2')
+    age_col      = col_case_mapping.get('ageinyears')
+    age_col2     = col_case_mapping.get('ageinyears2')
     neonatal_col = col_case_mapping.get('isneonatal')
-    age_adult_col = col_case_mapping.get('age_adult')  # Note: underscore remains important
+    age_adult_col = col_case_mapping.get('age_adult')
 
     if age_col and age_col2 in data_df.columns:
         data_df[age_col] = data_df[age_col].fillna(data_df[age_col2])
@@ -199,8 +228,8 @@ def change_null_toskipped(
     if age_col and age_adult_col in data_df.columns:
         data_df[age_col] = data_df[age_col].fillna(
             data_df[age_adult_col].where(
-                (data_df[age_adult_col].notna()) & 
-                (data_df[age_adult_col] != 999) & 
+                (data_df[age_adult_col].notna()) &
+                (data_df[age_adult_col] != 999) &
                 (data_df[age_adult_col] <= 120)
             )
         )
@@ -208,31 +237,32 @@ def change_null_toskipped(
             print(f"Updated {age_col} adults if NULL with valid values from {age_adult_col}")
 
     if verbose:
-        print(f"Number of NULLs after cleaning {data_df.isna().sum().sum():,}")  
+        print(f"Number of NULLs after cleaning {data_df.isna().sum().sum():,}")
         print("\n[DEBUG check_input] Processing Complete")
 
     return data_df
 
-def pyCrossVA(input:str, key:str):
+
+def pyCrossVA(input: str, key: str):
     """
     inherit from pyCrossVA library
     convert WHOVA structure into ccva struture
     """
     from pycrossva.transform import transform
-    ccva_data = transform(("2016WHOv151","InterVA5"),input, raw_data_id="_key", lower=True, verbose=5)
+    ccva_data = transform(("2016WHOv151", "InterVA5"), input, raw_data_id="_key", lower=True, verbose=5)
     return ccva_data
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, required=True, help="Path to input CSV")
     parser.add_argument("--verbose", type=bool, required=False, help="Print output to terminal")
     args = parser.parse_args()
-    
+
     with open(args.input, 'rb') as file:
         result = chardet.detect(file.read())
         encoding = result['encoding']
 
-    # Read file with detected encoding
     print("\n Reading the input file")
-    df = pd.read_csv(args.input,encoding = encoding,low_memory = False)
+    df = pd.read_csv(args.input, encoding=encoding, low_memory=False)
     change_null_toskipped(df, verbose=args.verbose)
