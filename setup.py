@@ -1,31 +1,4 @@
-from setuptools import setup, find_packages
-
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
-
-setup(
-    name="vman_dq",
-    version="1.0.0",
-    author="Isaac Lyatuu",
-    author_email="ilyatuu@gmail.com",
-    description="VMan3 Data Quality Toolkit",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/vman-tool/vman3_dq",
-    packages=find_packages(),
-    install_requires=[
-        'pandas>=1.0.0',
-        'numpy>=1.18.0',
-        'chardet>=3.0.4',
-    ],
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-    ],
-    python_requires='>=3.7',
-    include_package_data=True,
-    package_data={
-        'vman_dq': ['data/*.csv'],
-    },
-)
+# Package configuration lives in pyproject.toml (PEP 517/518/621).
+# This stub exists only for backward compatibility with pip < 21.3.
+from setuptools import setup
+setup()

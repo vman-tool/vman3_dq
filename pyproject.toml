@@ -1,28 +1,35 @@
-# pyproject.toml
-
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vman_dq"
-version = "1.0.0"
+version = "1.0.2"
 authors = [
     {name = "Isaac Lyatuu", email = "ilyatuu@gmail.com"},
 ]
 description = "VMan3 Data Quality Toolkit"
 readme = "README.md"
 requires-python = ">=3.7"
-dependencies = [
-    "pandas>=1.0.0",
-    "numpy>=1.18.0",
-    "chardet>=3.0.4",
-]
+license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "pandas>=1.0.0",
+    "numpy>=1.18.0",
+    "chardet>=3.0.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/vman-tool/vman3_dq"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+vman_dq = [
+    "data/*.csv",
+]
