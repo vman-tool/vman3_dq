@@ -221,16 +221,18 @@ def change_null_toskipped(
             print(f"Updated {age_col} with values from {age_col2}")
 
     if age_col and neonatal_col in data_df.columns:
-        data_df.loc[data_df[age_col].isna() & (data_df[neonatal_col] == 1), age_col] = 0
+        neonatal_numeric = pd.to_numeric(data_df[neonatal_col], errors='coerce')
+        data_df.loc[data_df[age_col].isna() & (neonatal_numeric == 1), age_col] = 0
         if verbose:
             print(f"Set {age_col} to 0 for neonatal cases")
 
     if age_col and age_adult_col in data_df.columns:
+        age_adult_numeric = pd.to_numeric(data_df[age_adult_col], errors='coerce')
         data_df[age_col] = data_df[age_col].fillna(
-            data_df[age_adult_col].where(
-                (data_df[age_adult_col].notna()) &
-                (data_df[age_adult_col] != 999) &
-                (data_df[age_adult_col] <= 120)
+            age_adult_numeric.where(
+                (age_adult_numeric.notna()) &
+                (age_adult_numeric != 999) &
+                (age_adult_numeric <= 120)
             )
         )
         if verbose:
