@@ -42,17 +42,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "-r", "--report", dest="report", action="store_true",
         help="Also render a Markdown report across all input files "
-             "(written to <first file's directory>/reports/dqa_report.md)",
+             "(by default written to <first file's directory>/reports/dqa_report.md)",
     )
     parser.add_argument(
-        "-o", "--out-dir", dest="out_dir", default=None,
-        help="Directory to write the report to (with -report). "
+        "-o", "--output", dest="out_file", default=None,
+        help="File to write the Markdown report to (with -r/--report).",
+    )
+    parser.add_argument(
+        "--out-dir", dest="out_dir", default=None,
+        help="Directory to write the report to (with -r/--report). "
              "Default: reports/ next to the first input file.",
     )
     args = parser.parse_args(argv)
 
     try:
-        results = run_dqa(*args.files, report=args.report, out_dir=args.out_dir)
+        results = run_dqa(
+            *args.files,
+            report=args.report,
+            out_dir=args.out_dir,
+            out_file=args.out_file,
+        )
     except Exception as exc:  # surface a clean CLI error instead of a traceback
         print(f"run_dqa: {exc}", file=sys.stderr)
         return 1

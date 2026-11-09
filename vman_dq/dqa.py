@@ -22,6 +22,9 @@ absent from the input DataFrame, that indicator (or, for ICI, that
 specific rule) is treated as not computable for the dataset rather than
 raising an error - consistent with the source manuscript's treatment of
 field absence as a data limitation, not an indicator failure.
+All indicators are computed only for records explicitly consenting
+(`id10013` equal to "yes"); non-consenting, unknown, and missing-consent
+records receive missing per-record scores and are excluded from summaries.
 
 Note on ICI: the manuscript's original validated results (Table 7) and
 appendix (Table A3) used six consistency rules (C1-C6). ICI was then
@@ -113,6 +116,14 @@ def _yn_series(df: pd.DataFrame, field: str) -> Optional[pd.Series]:
     if c is None:
         return None
     return df[c].astype(str).str.strip().str.lower()
+
+
+def _consented_mask(df: pd.DataFrame) -> pd.Series:
+    """True only for records with an explicit yes in id10013."""
+    consent_col = _col(df, "id10013")
+    if consent_col is None:
+        return pd.Series(False, index=df.index)
+    return df[consent_col].astype(str).str.strip().str.lower().eq("yes")
 
 
 def _num_series(df: pd.DataFrame, field: str) -> Optional[pd.Series]:
@@ -211,7 +222,7 @@ def _tier_counts(s: pd.Series, high: float, moderate_low: float,
 def compute_ics(df: pd.DataFrame, id_prefix: str = "id") -> pd.Series:
     """Per-record ICS (0-100): share of answered binary fields that are
     definitive yes/no rather than dk/ref. NaN for records with zero binary
-    responses (not computable), matching the manuscript's definition.
+    responses (not computable) or without explicit consent (`id10013=yes`).
     """
     df = _dedupe_columns(df)
     id_cols = [c for c in df.columns if c.lower().startswith(id_prefix)]
@@ -227,7 +238,7 @@ def compute_ics(df: pd.DataFrame, id_prefix: str = "id") -> pd.Series:
 
     with np.errstate(invalid="ignore", divide="ignore"):
         ics = (informative / total.replace(0, np.nan)) * 100
-    return ics
+    return ics.where(_consented_mask(df))
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +254,8 @@ _RRS_EDU_5 = {"no_formal_education"}
 def compute_rrs(df: pd.DataFrame) -> pd.Series:
     """Per-record RRS (0-100). NaN if the recall period (death date vs
     interview date) cannot be parsed, or if the dataset lacks the fields
-    RRS requires (id10008, id10009, id10023, and id10012 or id10011).
+    RRS requires (id10008, id10009, id10023, and id10012 or id10011), or
+    the record did not explicitly consent (`id10013` is not "yes").
     """
     df = _dedupe_columns(df)
 
@@ -295,10 +307,10 @@ def compute_rrs(df: pd.DataFrame) -> pd.Series:
         still_na = wedu.isna()
         wedu[still_na & edu.isin(_RRS_EDU_10)] = 10.0
         wedu[still_na & edu.isin(_RRS_EDU_5)] = 5.0
-    wedu = wedu.fillna(7.0)  # unknown/dk literacy - neutral midpoint, not excluded
+    wedu = wedu.fillna(0.0)
 
     rrs = wrel + wprox + wrec + wedu
-    rrs = rrs.where(computable_recall)
+    rrs = rrs.where(computable_recall & _consented_mask(df))
     return rrs
 
 
@@ -360,7 +372,9 @@ def compute_ici(df: pd.DataFrame, gender_field: str = "id10019"
     open-ended: rules whose required fields are absent from the input
     DataFrame are excluded from that dataset's denominator N entirely (not
     scored as violations, not scored as passes), so N can grow as more
-    rules are added without changing this function's contract.
+    rules are added without changing this function's contract. Records
+    without explicit consent (`id10013` equal to "yes") have missing ICI
+    and missing rule flags.
     """
     df = _dedupe_columns(df)
     ill = _num_series(df, "id10120")
@@ -423,8 +437,10 @@ def compute_ici(df: pd.DataFrame, gender_field: str = "id10019"
         return pd.Series(np.nan, index=df.index), pd.DataFrame(index=df.index), rule_computable
 
     flags = pd.DataFrame({rid: rule_series[rid].fillna(False) for rid in active}, index=df.index)
+    flags = flags.astype("boolean")
+    flags.loc[~_consented_mask(df), :] = pd.NA
     n_rules = len(active)
-    n_violations = flags.sum(axis=1)
+    n_violations = flags.sum(axis=1, min_count=1)
     ici = (1 - n_violations / n_rules) * 100
     return ici, flags, rule_computable
 
@@ -441,6 +457,7 @@ def compute_aid(df: pd.DataFrame, max_minutes: float = 480.0) -> pd.Series:
     1,440 minutes for an apparent midnight crossing. Records with
     non-positive or implausible (>= max_minutes) durations are excluded, as
     is the whole indicator when id10011/id10481 are absent from the dataset.
+    Records without explicit consent (`id10013` equal to "yes") are missing.
     """
     df = _dedupe_columns(df)
     start_col = _col(df, "id10011")
@@ -477,7 +494,7 @@ def compute_aid(df: pd.DataFrame, max_minutes: float = 480.0) -> pd.Series:
             d += 1440
         minutes.at[idx] = d
 
-    minutes = minutes.where((minutes > 0) & (minutes < max_minutes))
+    minutes = minutes.where((minutes > 0) & (minutes < max_minutes) & _consented_mask(df))
     return minutes
 
 
@@ -500,33 +517,44 @@ def _run_dqa_single(df: pd.DataFrame) -> dict:
     ici, ici_flags, ici_computable = compute_ici(df)
     aid = compute_aid(df)
 
+    rule_violations = {}
+    for rid in ici_flags.columns:
+        rule_flags = ici_flags[rid]
+        n_eligible = int(rule_flags.count())
+        n_violations = int(rule_flags.sum())
+        rule_violations[rid] = {
+            "description": ICI_RULE_DESCRIPTIONS[rid],
+            "n": n_violations,
+            "pct": n_violations / n_eligible * 100 if n_eligible else None,
+        }
+
+    n_ici_eligible = int(ici_flags.notna().any(axis=1).sum()) if not ici_flags.empty else 0
+    if n_ici_eligible:
+        violations_per_record = ici_flags.sum(axis=1, min_count=1)
+        n_clean = int(violations_per_record.eq(0).sum())
+        records_passing_all_rules = {
+            "n": n_clean,
+            "pct": n_clean / n_ici_eligible * 100,
+        }
+        mean_errors_per_record = float(violations_per_record.mean())
+    else:
+        records_passing_all_rules = None
+        mean_errors_per_record = None
+
     ici_block = {
         "per_record": ici,
         "summary": _dist_stats(ici),
         "tiers": _tier_counts(ici, 90, 70, ("Excellent", "Good", "Critical")),
         "rules_applied": list(ici_flags.columns),
         "rules_excluded_missing_fields": [r for r, ok in ici_computable.items() if not ok],
-        "rule_violations": {
-            rid: {
-                "description": ICI_RULE_DESCRIPTIONS[rid],
-                "n": int(ici_flags[rid].sum()),
-                "pct": float(ici_flags[rid].mean() * 100),
-            }
-            for rid in ici_flags.columns
-        },
+        "rule_violations": rule_violations,
+        "records_passing_all_rules": records_passing_all_rules,
+        "mean_errors_per_record": mean_errors_per_record,
     }
-    if not ici_flags.empty:
-        n_clean = int((ici_flags.sum(axis=1) == 0).sum())
-        ici_block["records_passing_all_rules"] = {
-            "n": n_clean, "pct": n_clean / len(ici_flags) * 100,
-        }
-        ici_block["mean_errors_per_record"] = float(ici_flags.sum(axis=1).mean())
-    else:
-        ici_block["records_passing_all_rules"] = None
-        ici_block["mean_errors_per_record"] = None
 
     return {
         "n_records": len(df),
+        "n_consented": int(_consented_mask(df).sum()),
         "ics": {
             "computable": ics.notna().any(),
             "per_record": ics,
@@ -561,6 +589,7 @@ def run_dqa(
     labels: Optional[List[str]] = None,
     title: str = "VMan3 DQA Indicator Report",
     out_dir: Optional[Union[str, "os.PathLike[str]"]] = None,
+    out_file: Optional[Union[str, "os.PathLike[str]"]] = None,
 ) -> Dict[str, dict]:
     """Compute ICS, RRS, ICI, and AID for one or more VA datasets.
 
@@ -580,9 +609,9 @@ def run_dqa(
         One or more DataFrames and/or CSV paths (mixing both is fine).
     report
         If True, also render a Markdown report across all inputs (see
-        dqa_report()) under the "report" key. When any input was a CSV
-        path, the report is additionally written to disk (out_dir, or
-        "<first CSV's directory>/reports/dqa_report.md" by default).
+        dqa_report()) under the "report" key. The report is written to
+        out_file when given, otherwise to out_dir or
+        "<first CSV's directory>/reports/dqa_report.md" by default.
     labels
         Optional custom label per dataset, same order as inputs. Defaults
         to the CSV filename (without extension) for file inputs, or
@@ -590,6 +619,9 @@ def run_dqa(
     out_dir
         Directory to write the report file to when report=True and at
         least one input was a CSV path.
+    out_file
+        File path to write the report to when report=True. Takes precedence
+        over the default report location and cannot be combined with out_dir.
 
     Returns
     -------
@@ -600,6 +632,8 @@ def run_dqa(
         raise ValueError("run_dqa() requires at least one DataFrame or CSV file path")
     if labels is not None and len(labels) != len(inputs):
         raise ValueError("labels must have the same length as inputs")
+    if report and out_dir is not None and out_file is not None:
+        raise ValueError("out_dir and out_file cannot both be specified")
 
     dataframes: Dict[str, pd.DataFrame] = {}
     first_csv_dir: Optional[Path] = None
@@ -626,7 +660,11 @@ def run_dqa(
         report_md = dqa_report(dataframes, title=title)
         results["report"] = report_md
 
-        if first_csv_dir is not None:
+        if out_file is not None:
+            out_path = Path(out_file)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(report_md)
+        elif first_csv_dir is not None:
             out = Path(out_dir) if out_dir else (first_csv_dir / "reports")
             out.mkdir(parents=True, exist_ok=True)
             out_path = out / "dqa_report.md"

@@ -8,7 +8,7 @@ A Python package for processing and quality checking VA data.
 - Handles complex ODK relevance expressions
 - Case-insensitive variable matching
 - Detailed debugging output
-- Four record-level VA data quality indicators (ICS, RRS, ICI, AID) with
+- Four record-level VA data quality indicators (ICS, RRS, ICI, MID) with
   dataset-level summary statistics
 
 ## Installation
@@ -31,16 +31,40 @@ dict_df = pd.read_csv('dictionary.csv')
 processed_data = vman.change_null_toskipped(data_df, dict_df, verbose=True)
 ```
 
-## Data Quality Indicators (ICS, RRS, ICI, AID)
+## Data Quality Indicators (ICS, RRS, ICI, MID)
 
 Four record-level VA data quality indicators, as defined in *Four Practical
 Indicators for Real-Time Verbal Autopsy Data Quality Assessment: A
 Cross-National Validation Study* (Lyatuu et al.):
 
+### Dataset profile variable definitions
+
+- **Consent:** `id10013`; include records only when the value is `yes`.
+- **Sex:** `id10019`.
+- **Age groups:** use the WHO-VA Instrument flags `isadult`, `ischild`,
+  and `isneonate`. Match field names case-insensitively; bundled exports may
+  spell the last flag `isNeonatal`.
+- **Interview coverage:** use the start and end timestamps `id10011` and
+  `id10481`. Report the number of consented records with both timestamps
+  parseable and the date span from the earliest start to the latest end.
+  MID validity additionally requires a positive duration under 480 minutes.
+- Table 3 includes only the consent count alongside the concise dataset
+  overview. The detailed consent, age, sex, and timestamp-coverage profile is
+  reported in Table 9.
+
+All four indicators are computed only for records with explicit consent
+(`id10013` = `yes`). Records with `no`, unknown, or missing consent have blank
+per-record indicator values and are excluded from indicator summaries.
+
 - **ICS** - Informative Completeness Score: share of answered binary (id*)
   questions that are a definitive yes/no rather than dk/ref.
 - **RRS** - Respondent Reliability Score: weighted composite of relationship
-  to deceased, presence at death, recall period, and respondent literacy.
+  to the deceased, presence at death, recall period, and respondent
+  literacy/education. The literacy/education component is worth up to 10
+  points: literacy `yes` = 10 and `no` = 5; if literacy does not provide a
+  score, `no_formal_education` = 5 and primary, secondary, or higher-than-
+  secondary education = 10. `DK`, `Ref`, missing, and unrecognized values
+  score 0 when neither field provides a recognized score.
 - **ICI** - Internal Consistency Index: share of nine logical-consistency
   rules not violated by the record. C2-C5's field lists are hand-verified
   (each field confirmed `select_one` with a "yes" option) against
@@ -80,9 +104,23 @@ Cross-National Validation Study* (Lyatuu et al.):
     neonatal status - this is its correct home.
   - C6-C9 only flag when the underlying symptom was itself reported (e.g.
     C6 requires `id10147=='yes'`, not just a fever-duration value present).
-- **AID** - Average Interview Duration: elapsed minutes between interview
-  start and end, handling both full-datetime (2022 instrument) and time-only
-  (2016 instrument) fields.
+- **MID** - Median Interview Duration: median elapsed minutes between
+  interview start and end, handling both full-datetime (2022 instrument)
+  and time-only (2016 instrument) fields. It is calculated only for consented
+  records with parseable timestamps and a duration greater than 0 and less
+  than 480 minutes. In the Python results, the existing `aid` result key
+  contains this duration output; reports label it MID.
+
+The generated report includes Tables 3-9. Table 7 shows rule-level violation
+counts and percentages, mean ICI, the count and percentage passing every
+applied rule, and mean errors per record. Mean ICI is the average per-record
+score: `100 * (1 - violations / applicable rules)`. Passing all rules means
+zero violations; mean errors per record is total rule violations divided by
+the number of consented records. Table 8 reports MID duration statistics,
+with `Consented` counting records where `id10013` is `yes` and `N (valid)`
+counting consented records with valid durations as defined above. Table 9
+contains the detailed dataset profile, including consent, sex, age groups,
+and timestamp coverage.
 
 The primary entry point is `run_dqa`. It accepts one or more datasets, each
 either a pandas DataFrame - built from a CSV locally, or from database
@@ -103,7 +141,7 @@ r['rrs']['tiers']              # {'High': {...}, 'Moderate': {...}, 'Low': {...}
 r['ici']['rule_violations']    # per-rule (C1-C9) violation counts/pct
 r['aid']['per_record']         # pandas Series, one value per row
 
-# Multiple datasets at once, plus a Markdown report (Tables 3-8 layout) across all of them:
+# Multiple datasets at once, plus a Markdown report (Tables 3-9 layout) across all of them:
 results = run_dqa(df1, df2, df3, report=True)
 print(results['report'])
 
@@ -137,8 +175,27 @@ short option (`-r`), a double dash for the full-word long option
 (`--report`) - both forms are accepted and equivalent.
 
 Prints a summary for each file and, with `-r`/`--report`, a combined
-Markdown report (also written to `<first file's directory>/reports/dqa_report.md`,
-or `-o/--out-dir` if given).
+Markdown report. By default, it is written to
+`<first file's directory>/reports/dqa_report.md`. To choose a specific report
+filename, pass that filename to `-o/--output`. This writes a file (not a
+directory); a relative path is created from the current working directory.
+For example, the following creates or replaces `output.md` in the directory
+where you run the command:
+
+```bash
+run_dqa vman_dq/data/va_2016_tz.csv \
+  vman_dq/data/va_2022_es.csv \
+  vman_dq/data/va_2022_ng.csv \
+  -r -o output.md
+```
+
+You can also specify a different path, such as `-o reports/november.md`.
+Use `--out-dir` instead when you want to choose an output directory but keep
+the default report filename:
+
+```bash
+run_dqa file1.csv file2.csv file3.csv -r --out-dir reports
+```
 
 Deactivate the environment when done with `deactivate`.
 
@@ -148,7 +205,7 @@ From a clone of this repo, without `pip install`-ing anything, either of
 these are equivalent to the `run_dqa` console command above:
 
 ```bash
-python3 -m vman_dq.cli file1.csv file2.csv file3.csv --report
+python3 -m vman_dq.cli file1.csv file2.csv file3.csv --report -o output.md
 ```
 
 `-m` runs a module by its import name rather than by file path - it finds
@@ -166,13 +223,11 @@ A thin wrapper around the same CLI, for anyone who'd rather run a plain
 script path than remember the `-m` module syntax.
 
 To regenerate the full validation report against the reference datasets in
-`vman_dq/data/` with country/instrument-version metadata for Table 3 (also
-serves as a sanity check against the manuscript's published Tables 3-8 -
-exact match is not expected since the bundled CSVs have since been updated
-with more records):
+`vman_dq/data/` with country/instrument-version metadata for Table 3 and a
+descriptive dataset profile in Table 9. The report can also be compared with
+the manuscript's published Tables 3-8 for validation; exact matches are not
+expected because the bundled CSVs have since been updated with more records.
 
 ```bash
 python3 scripts/generate_dqa_report.py
 ```
-
-
